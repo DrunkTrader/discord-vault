@@ -1,380 +1,222 @@
 # DiscordVault
 
-> Encrypted file storage using Discord as the storage backend.
+Encrypted file storage using Discord as a storage backend.
 
-DiscordVault is a Python-based experimental storage system that encrypts files locally, converts the encrypted data into lossless PNG chunks, and stores those chunks as Discord attachments.
+DiscordVault encrypts files locally with **AES-256-GCM**, splits the encrypted data into chunks, encodes the chunks as lossless PNGs, and stores them as Discord attachments.
 
-The core principle is:
-
-```text
-Local File
-    │
-    ▼
-AES-256-GCM Encryption
-    │
-    ▼
-Encrypted Binary Chunks
-    │
-    ▼
-PNG Encoding
-    │
-    ▼
-Discord Attachments
-```
-
-The data is encrypted **before** it reaches Discord.
+> Experimental project focused on encrypted storage, cryptography, chunked data, and API-based storage backends.
 
 ---
 
-## Current Status
+## Architecture
 
-### Implemented
+```mermaid
+flowchart LR
+    A[File / Folder] --> B{Input Type}
 
-* [x] File encryption using **AES-256-GCM**
-* [x] Per-file random encryption key
-* [x] X25519-based key wrapping
-* [x] HKDF-SHA256 key derivation
-* [x] Local public/private key management
-* [x] SHA-256 file integrity verification
-* [x] SHA-256 per-chunk integrity verification
-* [x] Custom binary chunk header
-* [x] 1920 × 1080 RGB PNG encoding
-* [x] Lossless binary-to-PNG conversion
-* [x] File splitting into multiple chunks
-* [x] Manifest generation
-* [x] Local encryption/decryption
-* [x] Discord bot integration
-* [x] Discord REST API client
-* [x] Upload encrypted chunks to Discord
-* [x] Download attachments from Discord
-* [x] Discord vault identification
-* [x] Discord message pagination
-* [x] Vault discovery
-* [x] Complete Discord vault download
-* [x] End-to-end SHA-256 verification
-* [x] CLI interface
+    B -->|File| C[Read File]
+    B -->|Folder| D[Create Temporary ZIP]
 
-### Current tested flow
+    C --> E[Generate AES-256 Key]
+    D --> E
 
-```text
-test.bin
-   │
-   ▼
-encode_file()
-   │
-   ├── AES-256-GCM
-   ├── SHA-256
-   ├── X25519 key wrapping
-   └── PNG encoding
-   │
-   ▼
-encrypted/
-├── manifest.json
-├── chunk_000000.png
-├── chunk_000001.png
-├── chunk_000002.png
-└── chunk_000003.png
-   │
-   ▼
-Discord
-   │
-   ▼
-download
-   │
-   ▼
-decode_file()
-   │
-   ▼
-recovered.bin
-   │
-   ▼
-SHA-256 comparison
-   │
-   ▼
-Original == Recovered
+    E --> F[AES-256-GCM]
+    F --> G[Encrypted Data]
+
+    G --> H[Split into Chunks]
+    H --> I[PNG Encoding]
+
+    E --> J[X25519 Key Wrapping]
+    J --> K[Wrapped File Key]
+
+    I --> L[Encrypted PNG Chunks]
+    K --> M[Manifest]
+
+    L --> N[Discord]
+    M --> N
+
+    N --> O[Download]
+    O --> P[Decrypt & Verify]
+    P --> Q{Original Type}
+
+    Q -->|File| R[Restore File]
+    Q -->|Folder| S[Extract ZIP]
+    S --> T[Restore Folder]
+````
+
+### Storage flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Vault as DiscordVault
+    participant Discord
+
+    User->>Vault: encode file/folder
+    Vault->>Vault: Generate AES-256 key
+    Vault->>Vault: Encrypt with AES-256-GCM
+    Vault->>Vault: Split into chunks
+    Vault->>Vault: Encode chunks as PNG
+    Vault->>Vault: Create manifest
+    Vault->>Discord: Upload manifest + encrypted chunks
+
+    User->>Vault: restore VAULT_ID
+    Vault->>Discord: Download vault
+    Discord-->>Vault: Encrypted manifest + chunks
+    Vault->>Vault: Decrypt chunks
+    Vault->>Vault: Verify SHA-256
+    Vault-->>User: Restore file/folder
 ```
 
 ---
 
-# Architecture
+## Features
+
+* AES-256-GCM authenticated encryption
+* X25519-based key wrapping
+* HKDF-SHA256 key derivation
+* SHA-256 integrity verification
+* Automatic chunking
+* Lossless PNG data encoding
+* File and folder support
+* Automatic ZIP creation for folders
+* Discord bot/API storage
+* Vault discovery
+* Local encryption and decryption
+* Download and restore
+
+---
+
+## Encryption Model
+
+Each vault receives a random AES-256 encryption key.
 
 ```mermaid
 flowchart TD
-    A[Input File] --> B[vault.py]
+    A[Original File] --> B[AES-256-GCM]
+    K[Random AES-256 Key] --> B
 
-    B --> C[Generate Random AES-256 Key]
-    C --> D[AES-256-GCM Encryption]
+    B --> C[Encrypted Chunks]
 
-    D --> E[Split into Chunks]
-    E --> F[Calculate SHA-256]
+    K --> D[X25519 Key Wrapping]
+    D --> E[Wrapped File Key]
 
-    C --> G[X25519 Key Wrapping]
-    G --> H[wrapped_file_key]
+    C --> F[Discord]
+    E --> F
 
-    E --> I[Custom Chunk Header]
-    I --> J[PNG Encoder]
-
-    J --> K[Encrypted PNG Chunks]
-    H --> L[manifest.json]
-
-    K --> M[DiscordClient]
-    L --> M
-
-    M --> N[Discord REST API]
-    N --> O[#vault-storage]
+    G[Local Private Key] --> D
 ```
+
+The private key remains on the user's machine and is never uploaded to Discord.
+
+SHA-256 is used to verify:
+
+1. Individual chunks
+2. The final reconstructed file
 
 ---
 
-# Cryptographic Design
+## File / Folder Encoding
 
-DiscordVault uses multiple cryptographic primitives for different purposes.
+Files are processed directly.
 
-## AES-256-GCM
-
-AES-GCM provides authenticated encryption.
+Folders are first converted into a temporary ZIP archive:
 
 ```text
-Plaintext
-    │
-    ▼
+my-project/
+├── src/
+├── tests/
+└── README.md
+
+        ↓
+
+temporary archive.zip
+
+        ↓
+
 AES-256-GCM
-    │
-    ├── Ciphertext
-    └── Authentication Tag
+
+        ↓
+
+PNG chunks
+
+        ↓
+
+Discord
 ```
 
-This provides:
+The temporary ZIP is deleted after encryption.
 
-* Confidentiality
-* Authentication
-* Tamper detection
-
-A modified encrypted chunk should fail AES-GCM authentication during decryption.
+During restoration, it is reconstructed, verified, and safely extracted back into the original directory structure.
 
 ---
 
-## X25519
+## Example
 
-Each file gets a randomly generated AES key.
+### Encrypt a file
 
-That key must itself be protected.
+```bash
+python -m src.main encode \
+    data/input/test.bin \
+    data/output/vault
+```
 
-DiscordVault uses X25519-based key wrapping so that the AES key can be recovered using the locally stored private key.
+### Encrypt a folder
 
-Conceptually:
+```bash
+python -m src.main encode \
+    ./my-project \
+    data/output/vault
+```
+
+### Upload
+
+```bash
+python -m src.main upload \
+    data/output/vault
+```
+
+### List vaults
+
+```bash
+python -m src.main list
+```
+
+Example:
 
 ```text
-Random AES-256 Key
-        │
-        ▼
-X25519/HKDF Key Wrapping
-        │
-        ▼
-Wrapped AES Key
-        │
-        ▼
-manifest.json
+Vaults
+────────────────────────────────────────────────
+
+1. test.bin
+   ID:       c326642e77664612924cb1746e879199
+   Type:     file
+   Size:     20.00 MB
+   Chunks:   4
+
+2. my-project
+   ID:       91c8...
+   Type:     directory
+   Size:     8.42 MB
+   Chunks:   2
 ```
 
-The private key remains locally stored.
+### Restore
 
-```text
-.discord-vault/
-└── private.key
-```
-
-The private key should **never be uploaded to Discord or committed to Git**.
-
----
-
-# SHA-256 Integrity
-
-Each chunk has its own SHA-256 hash:
-
-```json
-{
-    "index": 0,
-    "size": 6220656,
-    "sha256": "...",
-    "image": "chunk_000000.png"
-}
-```
-
-The complete original file also has a SHA-256 hash:
-
-```json
-{
-    "file_sha256": "..."
-}
-```
-
-During restoration:
-
-```text
-Downloaded Chunk
-       │
-       ▼
-AES-GCM Authentication
-       │
-       ▼
-Plaintext
-       │
-       ▼
-SHA-256
-       │
-       ▼
-Manifest Hash
-```
-
-Finally:
-
-```text
-Recovered File SHA-256
-          ==
-Original File SHA-256
+```bash
+python -m src.main restore \
+    <VAULT_ID> \
+    ./restored-project
 ```
 
 ---
 
-# PNG Storage Format
-
-DiscordVault currently uses:
-
-```text
-1920 × 1080
-RGB
-```
-
-Each pixel contains three 8-bit channels:
-
-```text
-R G B
-```
-
-Therefore:
-
-```text
-1920 × 1080 × 3
-= 6,220,800 bytes
-```
-
-A custom 128-byte header and AES-GCM authentication overhead are reserved.
-
-The current plaintext chunk capacity is:
-
-```text
-6,220,656 bytes
-```
-
-The PNG is lossless, so the encoded bytes can be recovered exactly.
-
----
-
-# Chunk Format
-
-Each PNG begins logically with:
-
-```text
-┌──────────────────────────────┐
-│        128-byte Header       │
-├──────────────────────────────┤
-│                              │
-│      AES-GCM Ciphertext      │
-│                              │
-├──────────────────────────────┤
-│           Padding            │
-│                              │
-└──────────────────────────────┘
-```
-
-The header contains information such as:
-
-* Magic/version
-* File ID
-* Chunk index
-* Total chunk count
-* Plaintext size
-* Nonce
-* Payload size
-* SHA-256 hash
-
----
-
-# Manifest
-
-Each vault contains a `manifest.json`.
-
-Example structure:
-
-```json
-{
-    "version": 1,
-    "file_id": "...",
-    "filename": "test.bin",
-    "file_size": 20971520,
-    "file_sha256": "...",
-    "chunk_size": 6220656,
-    "total_chunks": 4,
-    "encryption": {
-        "algorithm": "AES-256-GCM",
-        "key_wrap": "X25519-HKDF-SHA256-AES-256-GCM"
-    },
-    "wrapped_file_key": {
-        "ephemeral_public_key": "...",
-        "nonce": "...",
-        "encrypted_file_key": "..."
-    },
-    "chunks": []
-}
-```
-
-The manifest allows the system to reconstruct and verify the vault.
-
----
-
-# Discord Storage
-
-Discord is treated as a **storage backend**, not as part of the encryption system.
-
-```text
-vault.py
-   │
-   │ encrypted files
-   ▼
-discord_client.py
-   │
-   │ HTTPS
-   ▼
-Discord REST API
-```
-
-A vault is represented by messages containing:
-
-```text
-DiscordVault vault=<FILE_ID> type=manifest
-```
-
-and:
-
-```text
-DiscordVault vault=<FILE_ID> type=chunk index=0
-DiscordVault vault=<FILE_ID> type=chunk index=1
-DiscordVault vault=<FILE_ID> type=chunk index=2
-...
-```
-
-The encrypted PNG itself contains the actual encrypted data.
-
----
-
-# Project Structure
+## Project Structure
 
 ```text
 discord-vault/
 │
 ├── src/
-│   ├── __init__.py
 │   ├── crypto.py
 │   ├── discord_client.py
 │   ├── key_manager.py
@@ -382,117 +224,43 @@ discord-vault/
 │   └── vault.py
 │
 ├── tests/
-│   ├── __init__.py
-│   ├── test_crypto.py
-│   └── test_vault.py
-│
 ├── data/
-│   ├── input/
-│   └── output/
-│
 ├── .discord-vault/
-│   └── private.key
-│
 ├── .env
-├── .gitignore
 ├── requirements.txt
 └── README.md
 ```
 
----
-
-# CLI
-
-## Encrypt a file
-
-```bash
-python -m src.main encode \
-    data/input/test.bin \
-    data/output/encrypted
-```
-
-Produces:
-
-```text
-encrypted/
-├── manifest.json
-├── chunk_000000.png
-├── chunk_000001.png
-└── ...
-```
-
-## Decode a local vault
-
-```bash
-python -m src.main decode \
-    data/output/encrypted \
-    data/output/recovered.bin
-```
-
-## Upload a vault
-
-```bash
-python -m src.main upload \
-    data/output/encrypted
-```
-
-## List Discord vaults
-
-```bash
-python -m src.main list
-```
-
-## Download a vault
-
-```bash
-python -m src.main download \
-    <VAULT_ID> \
-    data/output/discord-download
-```
+| Module              | Responsibility                             |
+| ------------------- | ------------------------------------------ |
+| `crypto.py`         | Encryption and key wrapping                |
+| `key_manager.py`    | Local key management                       |
+| `vault.py`          | Chunking, PNG encoding, manifests, restore |
+| `discord_client.py` | Discord API/storage operations             |
+| `main.py`           | CLI                                        |
 
 ---
 
-# Configuration
+## Setup
 
-Create a `.env` file:
+```bash
+git clone <repository-url>
+cd discord-vault
+
+python -m venv .venv
+source .venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+Configure the Discord bot:
 
 ```env
 DISCORD_BOT_TOKEN=your_bot_token
 DISCORD_CHANNEL_ID=your_channel_id
 ```
 
-The `.env` file should **never be committed**.
-
-The Discord bot should have only the permissions required for the storage channel:
-
-* View Channel
-* Send Messages
-* Attach Files
-* Read Message History
-
-Administrator permissions are not required.
-
----
-
-# Installation
-
-Clone the repository and create a virtual environment:
-
-```bash
-git clone <repository-url>
-cd discord-vault
-```
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-```
-
-Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
+Generate your local keypair using the project's key-management command.
 
 Run tests:
 
@@ -502,129 +270,47 @@ python -m pytest
 
 ---
 
-# Security Model
+## Security Notes
 
-The intended security boundary is:
+Discord receives encrypted data rather than the original plaintext.
 
-```text
-                    LOCAL MACHINE
+However, Discord can still observe operational metadata such as:
 
-               ┌────────────────────┐
-               │    Private Key     │
-               │    private.key     │
-               └─────────┬──────────┘
-                         │
-                         ▼
-Input File ────────► DiscordVault
-                         │
-                         ▼
-                  AES-256-GCM
-                         │
-                         ▼
-                  Encrypted Data
-                         │
-                         ▼
-                       PNG
-                         │
-                         ▼
-                      Discord
-```
+* Attachment sizes
+* Timestamps
+* Number of stored attachments
+* Vault existence
 
-Discord receives the encrypted chunks.
+The current manifest also contains some file metadata.
 
-The private encryption key remains on the user's machine.
-
-### Important
-
-If the private key is lost, encrypted vaults may become unrecoverable.
-
-Back up the private key securely.
-
----
-
-# Current Limitations
-
-DiscordVault is currently an **experimental project**, not a production archival-storage system.
-
-Current limitations include:
-
-* Discord storage limits and policies can change.
-* Discord API rate limits apply.
-* The current implementation uses Discord messages as the vault index.
-* Very large vaults require many Discord messages.
-* The manifest currently exposes some metadata.
-* The current CLI primarily handles files.
-* Folder/archive handling is not implemented yet.
-* No resumable upload system yet.
-* No resumable download system yet.
-* No deduplication.
-* No compression pipeline.
-* No multi-device key management.
-* No automated key backup.
-* No production-grade storage redundancy.
-
-Do not use DiscordVault as the only backup of important data.
-
----
-
-# Future Improvements
-
-## Storage
-
-* [ ] Folder/directory support
-* [ ] Automatic ZIP/archive creation
-* [ ] Upload progress bars
-* [ ] Parallel chunk uploads
----
-
-# Design Philosophy
-
-DiscordVault follows a simple separation of responsibilities:
+**Never commit:**
 
 ```text
-crypto.py
-    ↓
-Cryptographic primitives
-
-key_manager.py
-    ↓
-Key storage
-
-vault.py
-    ↓
-Vault format + encryption + chunking
-
-discord_client.py
-    ↓
-Discord storage backend
-
-main.py
-    ↓
-CLI
+.env
+.discord-vault/private.key
+generated vault data
 ```
 
-The encryption layer should remain independent of Discord.
-
-This makes it possible to eventually use the same vault format with:
-
-```text
-Discord
-   │
-   ├── Local filesystem
-   ├── S3
-   ├── Google Drive
-   ├── Dropbox
-   └── Other storage backends
-```
-
-without changing the cryptographic format.
+Losing the private key can make encrypted vaults unrecoverable.
 
 ---
 
-# Disclaimer
+## Future Improvements
 
-DiscordVault is an experimental software project intended for learning, experimentation, and research into encrypted storage systems.
+* [ ] Encrypted manifests for stronger metadata privacy
+* [ ] Resumable uploads/downloads
+* [ ] Better Discord rate-limit handling
+* [ ] Parallel transfers
+* [ ] Compression before encryption
+* [ ] Deduplication
+* [ ] Incremental backups
+* [ ] Additional storage backends
+* [ ] Improved CLI and progress reporting
 
-It should not be considered a replacement for dedicated cloud backup or archival-storage services.
+---
 
-Always maintain an independent backup of important data and the private encryption key.
+## Disclaimer
+
+DiscordVault is an experimental project and should not be considered a replacement for dedicated backup or archival-storage systems.
+
+Always maintain an independent backup of important data and your private encryption key.

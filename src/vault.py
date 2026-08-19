@@ -2,8 +2,11 @@ import base64
 import hashlib
 import json
 import secrets
+import shutil
 import struct
+import tempfile
 import uuid
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -352,6 +355,40 @@ def sha256_file(path: Path) -> str:
 
     return hasher.hexdigest()
 
+# ============================================================
+# Folder archiving
+# ============================================================
+
+def archive_directory(
+    directory: Path,
+    output_zip: Path,
+) -> None:
+    """Create a ZIP while preserving paths relative to directory."""
+
+    directory = directory.resolve()
+    output_zip = output_zip.resolve()
+
+    with zipfile.ZipFile(
+        output_zip,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=6,
+    ) as archive:
+
+        for path in sorted(directory.rglob("*")):
+
+            if path.is_symlink():
+                raise ValueError(
+                    f"Symlinks are not supported: {path}"
+                )
+
+            if not path.is_file():
+                continue
+
+            archive.write(
+                path,
+                arcname=path.relative_to(directory),
+            )
 
 # ============================================================
 # Encode complete file
@@ -365,137 +402,264 @@ def encode_file(
     input_path = Path(input_path)
     output_dir = Path(output_dir)
 
+    if not input_path.exists():
+        raise FileNotFoundError(input_path)
+
     output_dir.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    file_size = input_path.stat().st_size
+    archive_path: Path | None = None
+    source_path = input_path
+    source_type = "file"
 
-    total_chunks = (
-        file_size + CHUNK_SIZE - 1
-    ) // CHUNK_SIZE
+    # --------------------------------------------------------
+    # Directory → temporary ZIP
+    # --------------------------------------------------------
 
-    file_id = create_file_id()
+    if input_path.is_dir():
 
-    # One random AES-256 key per file.
-    file_key = generate_key()
+        source_type = "directory"
 
-    # Wrap the AES key using X25519.
-    public_key = load_public_key()
+        temp_dir = Path(
+            tempfile.mkdtemp(
+                prefix="discord-vault-"
+            )
+        )
 
-    wrapped_key = wrap_key(
-        file_key,
-        public_key,
-    )
+        archive_path = (
+            temp_dir / "archive.zip"
+        )
 
-    chunks = []
+        try:
 
-    with input_path.open("rb") as file:
-
-        for index in range(
-            total_chunks
-        ):
-
-            plaintext = file.read(
-                CHUNK_SIZE
+            archive_directory(
+                input_path,
+                archive_path,
             )
 
-            if not plaintext:
-                break
+            source_path = archive_path
 
-            png_path = (
-                output_dir
-                / f"chunk_{index:06d}.png"
-            )
-
-            encode_chunk(
-                plaintext=plaintext,
-                file_id=file_id,
-                chunk_index=index,
-                total_chunks=total_chunks,
-                file_key=file_key,
-                output_path=png_path,
-            )
-
-            chunk_hash = hashlib.sha256(
-                plaintext
-            ).hexdigest()
-
-            chunks.append(
-                {
-                    "index": index,
-                    "size": len(plaintext),
-                    "sha256": chunk_hash,
-                    "image": png_path.name,
-                }
+            print(
+                f"Archived directory: "
+                f"{input_path}"
             )
 
             print(
-                f"Encoded chunk "
-                f"{index + 1}/{total_chunks} "
-                f"({len(plaintext):,} bytes)"
+                f"Archive size: "
+                f"{archive_path.stat().st_size:,} bytes"
             )
 
-    manifest = {
-        "version": 1,
-        "file_id": file_id.hex(),
-        "filename": input_path.name,
-        "file_size": file_size,
-        "file_sha256": sha256_file(
-            input_path
-        ),
-        "chunk_size": CHUNK_SIZE,
-        "total_chunks": total_chunks,
-        "encryption": {
-            "algorithm": "AES-256-GCM",
-            "key_wrap": (
-                "X25519-HKDF-SHA256-AES-256-GCM"
-            ),
-        },
-        "wrapped_file_key": {
-            "ephemeral_public_key": base64.b64encode(
-                wrapped_key[
-                    "ephemeral_public_key"
-                ]
-            ).decode("ascii"),
+        except Exception:
 
-            "nonce": base64.b64encode(
-                wrapped_key["nonce"]
-            ).decode("ascii"),
+            shutil.rmtree(
+                temp_dir,
+                ignore_errors=True,
+            )
 
-            "encrypted_file_key": base64.b64encode(
-                wrapped_key[
-                    "encrypted_file_key"
-                ]
-            ).decode("ascii"),
-        },
-        "chunks": chunks,
-    }
+            raise
 
-    manifest_path = (
-        output_dir / "manifest.json"
-    )
+    try:
 
-    manifest_path.write_text(
-        json.dumps(
-            manifest,
-            indent=4,
+        file_size = source_path.stat().st_size
+
+        total_chunks = (
+            file_size + CHUNK_SIZE - 1
+        ) // CHUNK_SIZE
+
+        file_id = create_file_id()
+
+        # One random AES-256 key per vault.
+        file_key = generate_key()
+
+        # Wrap AES key using X25519.
+        public_key = load_public_key()
+
+        wrapped_key = wrap_key(
+            file_key,
+            public_key,
         )
-    )
 
-    print()
-    print("Encryption complete.")
-    print(f"File:       {input_path}")
-    print(f"Size:       {file_size:,} bytes")
-    print(f"Chunks:     {total_chunks}")
-    print(f"Chunk size: {CHUNK_SIZE:,} bytes")
-    print(f"Output:     {output_dir}")
+        chunks = []
 
+        with source_path.open("rb") as file:
+
+            for index in range(
+                total_chunks
+            ):
+
+                plaintext = file.read(
+                    CHUNK_SIZE
+                )
+
+                if not plaintext:
+                    break
+
+                png_path = (
+                    output_dir
+                    / f"chunk_{index:06d}.png"
+                )
+
+                encode_chunk(
+                    plaintext=plaintext,
+                    file_id=file_id,
+                    chunk_index=index,
+                    total_chunks=total_chunks,
+                    file_key=file_key,
+                    output_path=png_path,
+                )
+
+                chunk_hash = hashlib.sha256(
+                    plaintext
+                ).hexdigest()
+
+                chunks.append(
+                    {
+                        "index": index,
+                        "size": len(plaintext),
+                        "sha256": chunk_hash,
+                        "image": png_path.name,
+                    }
+                )
+
+                print(
+                    f"Encoded chunk "
+                    f"{index + 1}/{total_chunks} "
+                    f"({len(plaintext):,} bytes)"
+                )
+
+        manifest = {
+            "version": 1,
+
+            "file_id": file_id.hex(),
+
+            "filename": input_path.name,
+
+            "source_type": source_type,
+
+            "archive_format": (
+                "zip"
+                if source_type == "directory"
+                else None
+            ),
+
+            "file_size": file_size,
+
+            "file_sha256": sha256_file(
+                source_path
+            ),
+
+            "chunk_size": CHUNK_SIZE,
+
+            "total_chunks": total_chunks,
+
+            "encryption": {
+                "algorithm": "AES-256-GCM",
+                "key_wrap": (
+                    "X25519-HKDF-SHA256-AES-256-GCM"
+                ),
+            },
+
+            "wrapped_file_key": {
+
+                "ephemeral_public_key":
+                    base64.b64encode(
+                        wrapped_key[
+                            "ephemeral_public_key"
+                        ]
+                    ).decode("ascii"),
+
+                "nonce":
+                    base64.b64encode(
+                        wrapped_key["nonce"]
+                    ).decode("ascii"),
+
+                "encrypted_file_key":
+                    base64.b64encode(
+                        wrapped_key[
+                            "encrypted_file_key"
+                        ]
+                    ).decode("ascii"),
+            },
+
+            "chunks": chunks,
+        }
+
+        manifest_path = (
+            output_dir / "manifest.json"
+        )
+
+        manifest_path.write_text(
+            json.dumps(
+                manifest,
+                indent=4,
+            )
+        )
+
+        print()
+        print("Encryption complete.")
+        print(f"Input:      {input_path}")
+        print(f"Type:       {source_type}")
+        print(f"Size:       {file_size:,} bytes")
+        print(f"Chunks:     {total_chunks}")
+        print(f"Chunk size: {CHUNK_SIZE:,} bytes")
+        print(f"Output:     {output_dir}")
+
+    finally:
+
+        if archive_path is not None:
+
+            shutil.rmtree(
+                archive_path.parent,
+                ignore_errors=True,
+            )
 
 # ============================================================
 # Decode complete file
 # ============================================================
+
+# ============================================================
+# Safe ZIP extraction
+# ============================================================
+
+def extract_zip_safely(
+    archive_path: Path,
+    output_dir: Path,
+) -> None:
+    """Extract ZIP while preventing path traversal."""
+
+    output_dir = output_dir.resolve()
+
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with zipfile.ZipFile(
+        archive_path
+    ) as archive:
+
+        for info in archive.infolist():
+
+            target = (
+                output_dir
+                / Path(info.filename)
+            ).resolve()
+
+            if (
+                target != output_dir
+                and output_dir not in target.parents
+            ):
+                raise ValueError(
+                    f"Unsafe ZIP path: "
+                    f"{info.filename}"
+                )
+
+            archive.extract(
+                info,
+                output_dir,
+            )
 
 def decode_file(
     input_dir: str | Path,
@@ -586,12 +750,44 @@ def decode_file(
             "Manifest chunk count mismatch"
         )
 
+    source_type = manifest.get(
+    "source_type",
+    "file",
+    )
+
+    if source_type not in {
+        "file",
+        "directory",
+    }:
+        raise ValueError(
+            f"Unsupported source type: "
+            f"{source_type}"
+        )
+
     output_file.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    with output_file.open("wb") as output:
+    temp_root = None
+
+    if source_type == "directory":
+
+        temp_root = Path(
+            tempfile.mkdtemp(
+                prefix="discord-vault-restore-"
+            )
+        )
+
+        temp_file = (
+            temp_root / "restore.zip"
+        )
+
+    else:
+
+        temp_file = output_file
+
+    with temp_file.open("wb") as output:
 
         for expected_index, chunk_info in enumerate(
             chunks
@@ -665,7 +861,7 @@ def decode_file(
     # Final verification
     # --------------------------------------------------------
 
-    actual_size = output_file.stat().st_size
+    actual_size = temp_file.stat().st_size
 
     if actual_size != expected_file_size:
         raise ValueError(
@@ -675,7 +871,7 @@ def decode_file(
         )
 
     actual_hash = sha256_file(
-        output_file
+        temp_file
     )
 
     print()
@@ -694,6 +890,30 @@ def decode_file(
             "Final SHA-256 verification failed"
         )
 
-    print()
-    print("SUCCESS: File reconstructed.")
-    print(f"Output: {output_file}")
+    if source_type == "directory":
+
+        try:
+
+            extract_zip_safely(
+                temp_file,
+                output_file,
+            )
+
+        finally:
+
+            if temp_root is not None:
+
+                shutil.rmtree(
+                    temp_root,
+                    ignore_errors=True,
+                )
+
+        print()
+        print("SUCCESS: Directory restored.")
+        print(f"Output: {output_file}")
+
+    else:
+
+        print()
+        print("SUCCESS: File reconstructed.")
+        print(f"Output: {output_file}")

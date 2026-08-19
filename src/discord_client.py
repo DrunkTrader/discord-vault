@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -603,13 +604,13 @@ class DiscordClient:
     def list_vaults(
         self,
         channel_id: str,
-) -> list[str]:
+    ) -> list[dict]:
 
         messages = self.list_messages(
             channel_id
         )
 
-        vaults = set()
+        vaults = {}
 
         for message in messages:
 
@@ -623,8 +624,92 @@ class DiscordClient:
             if metadata.get("type") != "manifest":
                 continue
 
-            vaults.add(
-                metadata["vault"]
+            vault_id = metadata["vault"]
+
+            for attachment in message.get(
+                "attachments",
+                [],
+            ):
+
+                if attachment.get(
+                    "filename"
+                ) != "manifest.json":
+                    continue
+
+                vaults[vault_id] = {
+                    "vault_id": vault_id,
+                    "url": attachment["url"],
+                }
+
+                break
+
+        results = []
+
+        for vault_id, vault in sorted(
+            vaults.items()
+        ):
+
+            temp_path = (
+                Path(tempfile.gettempdir())
+                / f"discord-vault-{vault_id}.json"
             )
 
-        return sorted(vaults)
+            try:
+
+                self.download_attachment(
+                    vault["url"],
+                    temp_path,
+                )
+
+                manifest = json.loads(
+                    temp_path.read_text()
+                )
+
+                results.append(
+                    {
+                        "vault_id": vault_id,
+                        "filename": manifest.get(
+                            "filename",
+                            "unknown",
+                        ),
+                        "source_type": manifest.get(
+                            "source_type",
+                            "file",
+                        ),
+                        "file_size": manifest.get(
+                            "file_size",
+                            0,
+                        ),
+                        "total_chunks": manifest.get(
+                            "total_chunks",
+                            0,
+                        ),
+                        "file_sha256": manifest.get(
+                            "file_sha256",
+                            "",
+                        ),
+                        "chunk_size": manifest.get(
+                            "chunk_size",
+                            0,
+                        ),
+                    }
+                )
+
+            except (
+                OSError,
+                json.JSONDecodeError,
+                KeyError,
+            ) as error:
+
+                print(
+                    f"Warning: unable to read "
+                    f"vault {vault_id}: {error}"
+                )
+
+            finally:
+
+                temp_path.unlink(
+                    missing_ok=True
+                )
+
+        return results

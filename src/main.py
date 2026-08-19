@@ -42,6 +42,7 @@ def cmd_upload(args):
 
 
 def cmd_list(args):
+
     client = DiscordClient()
 
     channel_id = get_channel_id()
@@ -54,11 +55,77 @@ def cmd_list(args):
         print("No vaults found.")
         return
 
-    print("Vaults:")
+    def format_size(
+        size: int,
+    ) -> str:
 
-    for vault_id in vaults:
-        print(f"  {vault_id}")
+        units = [
+            "B",
+            "KB",
+            "MB",
+            "GB",
+            "TB",
+        ]
 
+        value = float(size)
+
+        for unit in units:
+
+            if value < 1024:
+                return (
+                    f"{value:.2f} {unit}"
+                )
+
+            value /= 1024
+
+        return f"{value:.2f} PB"
+
+    print()
+    print("Vaults")
+    print("─" * 64)
+
+    for index, vault in enumerate(
+        vaults,
+        start=1,
+    ):
+
+        print()
+        print(
+            f"{index}. "
+            f"{vault['filename']}"
+        )
+
+        print(
+            f"   ID:       "
+            f"{vault['vault_id']}"
+        )
+
+        print(
+            f"   Type:     "
+            f"{vault['source_type']}"
+        )
+
+        print(
+            f"   Size:     "
+            f"{format_size(vault['file_size'])}"
+        )
+
+        print(
+            f"   Chunks:   "
+            f"{vault['total_chunks']}"
+        )
+
+        print(
+            f"   Chunk:    "
+            f"{format_size(vault['chunk_size'])}"
+        )
+
+        print(
+            f"   SHA-256:  "
+            f"{vault['file_sha256']}"
+        )
+
+    print()
 
 def cmd_download(args):
     client = DiscordClient()
