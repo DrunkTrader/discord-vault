@@ -1,8 +1,10 @@
 import argparse
 import os
+import tempfile
+import json
 from pathlib import Path
 
-from .discord_client import DiscordClient
+from .discord_client import (DiscordClient, DiscordError,)
 from .vault import decode_file, encode_file
 
 def get_channel_id() -> str:
@@ -31,14 +33,40 @@ def cmd_decode(args):
 
 
 def cmd_upload(args):
-    client = DiscordClient()
 
+    client = DiscordClient()
     channel_id = get_channel_id()
 
-    client.upload_vault(
-        Path(args.vault),
-        channel_id,
-    )
+    source = Path(args.input)
+
+    if not source.exists():
+        raise FileNotFoundError(source)
+
+    with tempfile.TemporaryDirectory(
+        prefix="discord-vault-"
+    ) as temp_dir:
+
+        vault_dir = Path(temp_dir) / "vault"
+
+        print(
+            f"Encrypting: {source}"
+        )
+
+        encode_file(
+            source,
+            vault_dir,
+        )
+
+        print()
+        print("Uploading vault...")
+
+        client.upload_vault(
+            vault_dir,
+            channel_id,
+        )
+
+        print()
+        print("Local encrypted data removed.")
 
 
 def cmd_list(args):
@@ -139,35 +167,100 @@ def cmd_download(args):
     )
 
 def cmd_restore(args):
-    client = DiscordClient()
 
+    client = DiscordClient()
     channel_id = get_channel_id()
 
-    vault_dir = Path(
-        "data/output/restore"
+    with tempfile.TemporaryDirectory(
+        prefix="discord-vault-restore-"
+    ) as temp_dir:
+
+        vault_dir = Path(temp_dir)
+
+        print(
+            f"Downloading vault "
+            f"{args.vault_id}..."
+        )
+
+        try:
+            client.download_vault(
+                channel_id,
+                args.vault_id,
+                vault_dir,
+            )
+
+        except DiscordError:
+            print()
+            print(
+                f"Error: vault "
+                f"'{args.vault_id}' "
+                f"was not found."
+            )
+            return
+
+        manifest_path = (
+            vault_dir / "manifest.json"
+        )
+
+        try:
+            manifest = json.loads(
+                manifest_path.read_text()
+            )
+
+        except (
+            FileNotFoundError,
+            json.JSONDecodeError,
+        ):
+            print()
+            print(
+                "Error: downloaded vault "
+                "has an invalid manifest."
+            )
+            return
+
+        if args.output:
+            output = Path(args.output)
+
+        else:
+            output = (
+                Path("restored")
+                / manifest["filename"]
+            )
+
+        print()
+        print(
+            f"Restoring: "
+            f"{manifest['filename']}"
+        )
+
+        print(
+            f"Output: {output}"
+        )
+
+        try:
+            decode_file(
+                vault_dir,
+                output,
+            )
+
+        except Exception as error:
+            print()
+            print(
+                f"Error: restore failed: "
+                f"{error}"
+            )
+            return
+
+        print()
+        print("Restore complete.")
+        print(
+            f"Restored to: {output}"
+        )
+
+    print(
+        "Temporary encrypted data removed."
     )
-
-    if vault_dir.exists():
-        import shutil
-        shutil.rmtree(vault_dir)
-
-    client.download_vault(
-        channel_id,
-        args.vault_id,
-        vault_dir,
-    )
-
-    output = Path(args.output)
-
-    decode_file(
-        vault_dir,
-        output,
-    )
-
-    print()
-    print("Restore complete.")
-    print(f"Output: {output}")
-
+    
 def main():
 
     parser = argparse.ArgumentParser(
@@ -239,8 +332,8 @@ def main():
     )
 
     upload_parser.add_argument(
-        "vault",
-        help="Encrypted vault directory",
+        "input",
+        help="File or folder to encrypt and upload",
     )
 
     upload_parser.set_defaults(
@@ -299,7 +392,8 @@ def main():
 
     restore_parser.add_argument(
         "output",
-        help="Recovered file",
+        nargs="?",
+        help="Optional output path",
     )
 
     restore_parser.set_defaults(

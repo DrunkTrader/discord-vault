@@ -36,6 +36,7 @@ ENV/
 
 data/output/
 data/vault/
+restored/
 
 # ============================================================
 # Local Input / Test Files
