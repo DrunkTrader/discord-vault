@@ -179,12 +179,16 @@ Vaults
    Type:     file
    Size:     1.42 GB
    Chunks:   242
+   Chunk:    6.07 MB
+   SHA-256:  a1b2c3d4e5f6...
 
 2. my-project
    ID:       91c8...
    Type:     directory
    Size:     8.42 MB
    Chunks:   2
+   Chunk:    6.07 MB
+   SHA-256:  f6e5d4c3b2a1...
 ```
 
 The Discord message itself only contains the vault identifier and storage metadata. The detailed file information comes from the vault manifest.

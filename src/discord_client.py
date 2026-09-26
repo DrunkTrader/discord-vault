@@ -1,7 +1,7 @@
 import json
 import os
+import sys
 import time
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,33 @@ MAX_RETRIES = 5
 
 class DiscordError(Exception):
     """Discord API error."""
+
+
+def _format_size(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
+        if value < 1024:
+            return f"{value:.2f} {unit}"
+        value /= 1024
+    return f"{value:.2f} PB"
+
+
+def _print_progress(downloaded: int, total: int | None) -> None:
+    if total:
+        percent = downloaded / total
+        bar_width = 30
+        filled = int(bar_width * percent)
+        bar = "█" * filled + "░" * (bar_width - filled)
+        sys.stdout.write(
+            f"\r{bar} {percent * 100:5.1f}% "
+            f"{_format_size(downloaded)}/{_format_size(total)}"
+        )
+        sys.stdout.flush()
+    else:
+        sys.stdout.write(
+            f"\r{_format_size(downloaded)} downloaded"
+        )
+        sys.stdout.flush()
 
 
 class DiscordClient:
@@ -119,35 +146,6 @@ class DiscordClient:
         return response
 
     # ========================================================
-    # Authentication
-    # ========================================================
-
-    def get_current_user(self) -> dict:
-
-        response = self._request(
-            "GET",
-            "/users/@me",
-        )
-
-        return response.json()
-
-    # ========================================================
-    # Channel
-    # ========================================================
-
-    def get_channel(
-        self,
-        channel_id: str,
-    ) -> dict:
-
-        response = self._request(
-            "GET",
-            f"/channels/{channel_id}",
-        )
-
-        return response.json()
-
-    # ========================================================
     # Upload one file
     # ========================================================
 
@@ -206,6 +204,7 @@ class DiscordClient:
         self,
         url: str,
         output_path: str | Path,
+        total: int | None = None,
     ) -> Path:
 
         output_path = Path(
@@ -228,14 +227,27 @@ class DiscordClient:
                 f"{response.status_code}"
             )
 
+        downloaded = 0
+
         with output_path.open("wb") as file:
 
             for chunk in response.iter_content(
                 chunk_size=1024 * 1024
             ):
 
-                if chunk:
-                    file.write(chunk)
+                if not chunk:
+                    continue
+
+                file.write(chunk)
+
+                downloaded += len(chunk)
+
+                _print_progress(
+                    downloaded,
+                    total,
+                )
+
+        print()
 
         return output_path
 
@@ -451,7 +463,6 @@ class DiscordClient:
 
         messages = self.list_messages(
             channel_id,
-            limit=100,
         )
 
         manifest_attachment = None
@@ -527,6 +538,7 @@ class DiscordClient:
         self.download_attachment(
             manifest_attachment["url"],
             manifest_path,
+            total=manifest_attachment.get("size"),
         )
 
         manifest = json.loads(
@@ -573,6 +585,7 @@ class DiscordClient:
             self.download_attachment(
                 attachment["url"],
                 output_path,
+                total=attachment.get("size"),
             )
 
         print()
@@ -583,24 +596,6 @@ class DiscordClient:
 
         return output_dir
 
-    # ========================================================
-    # Delete message
-    # ========================================================
-
-    def delete_message(
-        self,
-        channel_id: str,
-        message_id: str,
-    ) -> None:
-
-        self._request(
-            "DELETE",
-            (
-                f"/channels/{channel_id}"
-                f"/messages/{message_id}"
-            ),
-        )
-        
     def list_vaults(
         self,
         channel_id: str,
@@ -649,20 +644,21 @@ class DiscordClient:
             vaults.items()
         ):
 
-            temp_path = (
-                Path(tempfile.gettempdir())
-                / f"discord-vault-{vault_id}.json"
-            )
-
             try:
 
-                self.download_attachment(
+                response = requests.get(
                     vault["url"],
-                    temp_path,
+                    stream=True,
                 )
 
+                if not response.ok:
+                    raise DiscordError(
+                        f"Manifest download failed: "
+                        f"{response.status_code}"
+                    )
+
                 manifest = json.loads(
-                    temp_path.read_text()
+                    response.content
                 )
 
                 results.append(
@@ -699,17 +695,12 @@ class DiscordClient:
                 OSError,
                 json.JSONDecodeError,
                 KeyError,
+                DiscordError,
             ) as error:
 
                 print(
                     f"Warning: unable to read "
                     f"vault {vault_id}: {error}"
-                )
-
-            finally:
-
-                temp_path.unlink(
-                    missing_ok=True
                 )
 
         return results

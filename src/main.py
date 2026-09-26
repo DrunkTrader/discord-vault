@@ -7,6 +7,25 @@ from pathlib import Path
 from .discord_client import (DiscordClient, DiscordError,)
 from .vault import decode_file, encode_file
 
+_SIZE_UNITS = (
+    "B",
+    "KB",
+    "MB",
+    "GB",
+    "TB",
+    "PB",
+)
+
+
+def format_size(size: int) -> str:
+    value = float(size)
+    for unit in _SIZE_UNITS:
+        if value < 1024:
+            return f"{value:.2f} {unit}"
+        value /= 1024
+    return f"{value:.2f} PB"
+
+
 def get_channel_id() -> str:
     channel_id = os.getenv("DISCORD_CHANNEL_ID")
 
@@ -83,31 +102,6 @@ def cmd_list(args):
         print("No vaults found.")
         return
 
-    def format_size(
-        size: int,
-    ) -> str:
-
-        units = [
-            "B",
-            "KB",
-            "MB",
-            "GB",
-            "TB",
-        ]
-
-        value = float(size)
-
-        for unit in units:
-
-            if value < 1024:
-                return (
-                    f"{value:.2f} {unit}"
-                )
-
-            value /= 1024
-
-        return f"{value:.2f} PB"
-
     print()
     print("Vaults")
     print("─" * 64)
@@ -154,17 +148,6 @@ def cmd_list(args):
         )
 
     print()
-
-def cmd_download(args):
-    client = DiscordClient()
-
-    channel_id = get_channel_id()
-
-    client.download_vault(
-        channel_id,
-        args.vault_id,
-        Path(args.output),
-    )
 
 def cmd_restore(args):
 
@@ -353,29 +336,6 @@ def main():
         func=cmd_list
     )
 
-    # ======================================================
-    # download
-    # ======================================================
-
-    download_parser = subparsers.add_parser(
-        "download",
-        help="Download a vault from Discord",
-    )
-
-    download_parser.add_argument(
-        "vault_id",
-        help="Vault ID",
-    )
-
-    download_parser.add_argument(
-        "output",
-        help="Output directory",
-    )
-
-    download_parser.set_defaults(
-        func=cmd_download
-    )
-    
     # ======================================================
     # restore
     # ======================================================
