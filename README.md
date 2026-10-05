@@ -450,3 +450,13 @@ The test suite covers the core cryptographic, encoding, chunking, and vault func
 DiscordVault is an experimental project and is not intended to replace dedicated backup or archival-storage systems.
 
 Keep an independent backup of important data and the private encryption key.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=drunktrader%2Fdiscord-vault&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=drunktrader/discord-vault&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=drunktrader/discord-vault&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=drunktrader/discord-vault&type=date&legend=top-left" />
+ </picture>
+</a>
