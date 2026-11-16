@@ -292,6 +292,58 @@ SHA-256 is used for integrity verification of:
 
 SHA-256 is **not** used as encryption.
 
+### Keys and How They Fit Together
+
+There are two layers: one key encrypts the data, and a separate keypair protects that key.
+
+| Name | What it is | Algorithm | Lifetime | Where it lives |
+| --- | --- | --- | --- | --- |
+| key1 | Private key | X25519 | Permanent, created once | `.discord-vault/private.key` (local only) |
+| key2 | Public key, derived from key1 | X25519 | Permanent | `.discord-vault/public.key` |
+| key3 | File key: 32 random bytes from `secrets.token_bytes`. It encrypts every chunk of one vault | AES-256-GCM | One per upload | Never stored in plain form. Stored wrapped in `manifest.json` |
+| key4 | Disposable keypair, created for each wrap | X25519 | One function call | Public half in `manifest.json`. Private half is deleted |
+| wrapping key | Temporary key made from key4's private half and key2 | X25519, then HKDF-SHA256 | One function call | Never stored |
+| wrapped file key | key3 encrypted with the wrapping key. It is ciphertext, not a usable key | AES-256-GCM | Kept with the vault | `manifest.json` |
+
+#### Upload
+
+```text
+1. key3 = 32 random bytes                                   (the data key)
+2. Every chunk is encrypted with key3 using AES-256-GCM.
+   Each chunk gets a fresh random nonce, and its 128-byte header is
+   authenticated as additional data (AAD).
+
+To protect key3:
+3. Create the disposable keypair (key4).
+4. shared_secret    = X25519(key4_private, key2)
+5. wrapping_key     = HKDF-SHA256(shared_secret)
+6. wrapped_file_key = AES-256-GCM(wrapping_key, key3)
+7. Delete key4_private and the wrapping key.
+8. manifest.json stores: key4_public, nonce, wrapped_file_key
+```
+
+Two public keys cannot produce a shared secret. Step 4 needs one private key and the other side's public key. The disposable private key does that job once and is then discarded.
+
+HKDF is used because the raw X25519 output is not safe to use directly as an AES key.
+
+#### Restore
+
+```text
+1. shared_secret    = X25519(key1, key4_public)      (same value as upload step 4)
+2. wrapping_key     = HKDF-SHA256(shared_secret)
+3. key3             = AES-256-GCM decrypt(wrapping_key, wrapped_file_key)
+4. key3 decrypts every chunk
+```
+
+#### Why two layers
+
+* AES is fast, so it handles large data. X25519 only protects the small key.
+* Each vault has its own key3, so one leaked key exposes one vault.
+* Uploading needs only the public key (key2). Only restoring needs the private key (key1).
+* The Discord bot token is separate. It grants channel access, not decryption.
+
+Source: `src/crypto.py` (`generate_key`, `wrap_key`, `unwrap_key`, `derive_wrapping_key`), `src/key_manager.py`, and `encode_chunk` / `decode_chunk` in `src/vault.py`. For a full walkthrough, see [`learning/03-key-hierarchy.md`](learning/03-key-hierarchy.md) and [`learning/04-encryption-decryption-flow.md`](learning/04-encryption-decryption-flow.md).
+
 ---
 
 ## Project Structure
